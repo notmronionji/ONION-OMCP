@@ -12,12 +12,15 @@ GATEWAY_FILE="/etc/systemd/system/${GATEWAY_SERVICE}.service"
 TUNNEL_FILE="/etc/systemd/system/${TUNNEL_SERVICE}.service"
 ENV_FILE="/etc/omcp-panel.env"
 MODE_FILE="${INSTALL_DIR}/network-mode"
+PID_DIR="${INSTALL_DIR}/run"
+LOG_DIR="${INSTALL_DIR}/logs"
 PORT="${OMCP_PORT:-6767}"
 GATEWAY_PORT="${OMCP_GATEWAY_PORT:-6768}"
 REPO_URL="https://github.com/notmronionji/ONION-OMCP.git"
 
 say() { printf '\033[1;32m[OMCP]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[OMCP]\033[0m %s\n' "$*" >&2; }
+has_systemd() { [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; }
 fail() { printf '\033[1;31m[OMCP ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 need_root() { [[ "${EUID}" -eq 0 ]] || fail "Run as root: sudo bash install.sh"; }
 need_debian() {
@@ -67,7 +70,7 @@ ReadWritePaths=${APP_DIR}
 [Install]
 WantedBy=multi-user.target
 UNIT
-  systemctl enable "${SERVICE_NAME}"
+  if has_systemd; then systemctl enable "${SERVICE_NAME}"; fi
 }
 write_gateway_service() {
   cat > "${GATEWAY_FILE}" <<UNIT
@@ -93,7 +96,7 @@ ProtectHome=true
 [Install]
 WantedBy=multi-user.target
 UNIT
-  systemctl enable "${GATEWAY_SERVICE}"
+  if has_systemd; then systemctl enable "${GATEWAY_SERVICE}"; fi
 }
 install_cloudflared() {
   local arch asset
@@ -129,7 +132,39 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 UNIT
-  systemctl enable "${TUNNEL_SERVICE}"
+  if has_systemd; then systemctl enable "${TUNNEL_SERVICE}"; fi
+}
+load_gateway_env() {
+  set -a
+  # This file is created by the root-owned installer and contains only OMCP_* assignments.
+  . "${ENV_FILE}"
+  set +a
+}
+start_background() {
+  local name="$1"; shift
+  mkdir -p "${PID_DIR}" "${LOG_DIR}"
+  local pidfile="${PID_DIR}/${name}.pid"
+  if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    kill "$(cat "$pidfile")" 2>/dev/null || true
+    sleep 1
+  fi
+  nohup "$@" </dev/null >> "${LOG_DIR}/${name}.log" 2>&1 &
+  echo $! > "$pidfile"
+  sleep 1
+  if ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    warn "${name} did not stay running; inspect ${LOG_DIR}/${name}.log"
+    return 1
+  fi
+  say "Started ${name} (PID $(cat "$pidfile"))"
+}
+stop_background() {
+  local name="$1" pidfile="${PID_DIR}/$1.pid"
+  if [[ -f "$pidfile" ]]; then
+    local pid
+    pid="$(cat "$pidfile")"
+    kill "$pid" 2>/dev/null || true
+    rm -f "$pidfile"
+  fi
 }
 configure_access() {
   local mode="${1:-}"
@@ -144,7 +179,7 @@ configure_access() {
   if [[ "$mode" == "ipv4" ]]; then
     sed -i 's/^OMCP_GATEWAY_HOST=.*/OMCP_GATEWAY_HOST=0.0.0.0/' "${ENV_FILE}"
     rm -f "${TUNNEL_FILE}"
-    systemctl disable --now "${TUNNEL_SERVICE}" 2>/dev/null || true
+    if has_systemd; then systemctl disable --now "${TUNNEL_SERVICE}" 2>/dev/null || true; else stop_background tunnel; fi
     rm -f "${MODE_FILE}"
     printf 'ipv4\n' > "${MODE_FILE}"
   else
@@ -173,11 +208,24 @@ show_access() {
       warn "Could not detect a public IPv4. Check your provider networking, then open http://YOUR_PUBLIC_IPV4:${GATEWAY_PORT}"
     fi
   else
-    systemctl restart "${TUNNEL_SERVICE}"
+    if has_systemd; then
+      systemctl restart "${TUNNEL_SERVICE}"
+      local tunnel_log
+      tunnel_log="$(journalctl -u "${TUNNEL_SERVICE}" --no-pager -n 100 2>/dev/null || true)"
+    else
+      start_background tunnel runuser -u omcp -- /usr/local/bin/cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:${GATEWAY_PORT}"
+      local tunnel_log
+      tunnel_log="$(cat "${LOG_DIR}/tunnel.log" 2>/dev/null || true)"
+    fi
     say "Starting Cloudflare Quick Tunnel and waiting for its HTTPS link..."
     local link="" attempt
     for attempt in $(seq 1 30); do
-      link="$(journalctl -u "${TUNNEL_SERVICE}" --no-pager -n 80 2>/dev/null | grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -n 1 || true)"
+      if has_systemd; then
+        tunnel_log="$(journalctl -u "${TUNNEL_SERVICE}" --no-pager -n 100 2>/dev/null || true)"
+      else
+        tunnel_log="$(cat "${LOG_DIR}/tunnel.log" 2>/dev/null || true)"
+      fi
+      link="$(printf '%s' "$tunnel_log" | grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -n 1 || true)"
       [[ -n "$link" ]] && break
       sleep 1
     done
@@ -185,7 +233,7 @@ show_access() {
       say "Panel link: ${link}"
       say "Open it in your browser and enter the OMCP username/password shown above."
     else
-      warn "Tunnel URL is not ready yet. Check it with: journalctl -u ${TUNNEL_SERVICE} -f"
+      warn "Tunnel URL is not ready yet. Check log: tail -f ${LOG_DIR}/tunnel.log (or journalctl -u ${TUNNEL_SERVICE} -f with systemd)"
     fi
   fi
   warn "This tunnel exposes the web panel only. Minecraft Java TCP routing is a separate OMCP Routing Engine and is not implemented by this preview installer yet."
@@ -209,10 +257,20 @@ build_app() {
   if [[ -f "${ENV_FILE}" ]]; then chown root:omcp "${ENV_FILE}"; chmod 0640 "${ENV_FILE}"; fi
   write_panel_service
   write_gateway_service
-  systemctl daemon-reload
-  systemctl restart "${SERVICE_NAME}" "${GATEWAY_SERVICE}"
-  if [[ -f "${MODE_FILE}" ]] && [[ "$(cat "${MODE_FILE}")" == "non-ipv4" ]]; then
-    systemctl restart "${TUNNEL_SERVICE}"
+  if has_systemd; then
+    systemctl daemon-reload
+    systemctl restart "${SERVICE_NAME}" "${GATEWAY_SERVICE}"
+    if [[ -f "${MODE_FILE}" ]] && [[ "$(cat "${MODE_FILE}")" == "non-ipv4" ]]; then
+      systemctl restart "${TUNNEL_SERVICE}"
+    fi
+  else
+    warn "systemd not detected; launching OMCP processes in background mode."
+    start_background panel runuser -u omcp -- npm --prefix "${APP_DIR}" run preview -- --host 127.0.0.1 --port "${PORT}"
+    load_gateway_env
+    start_background gateway runuser -u omcp -- env OMCP_GATEWAY_HOST="${OMCP_GATEWAY_HOST}" OMCP_GATEWAY_PORT="${OMCP_GATEWAY_PORT}" OMCP_USERNAME="${OMCP_USERNAME}" OMCP_PASSWORD="${OMCP_PASSWORD}" node "${APP_DIR}/gateway.mjs"
+    if [[ -f "${MODE_FILE}" ]] && [[ "$(cat "${MODE_FILE}")" == "non-ipv4" ]]; then
+      start_background tunnel runuser -u omcp -- /usr/local/bin/cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:${GATEWAY_PORT}"
+    fi
   fi
 }
 install_panel() {
@@ -250,9 +308,15 @@ uninstall_panel() {
   need_root
   read -r -p "Remove OMCP Panel, access gateway, tunnel and application files? [y/N] " answer </dev/tty
   [[ "$answer" == "y" || "$answer" == "Y" ]] || { say "Cancelled."; return; }
-  systemctl disable --now "${SERVICE_NAME}" "${GATEWAY_SERVICE}" "${TUNNEL_SERVICE}" 2>/dev/null || true
+  if has_systemd; then
+    systemctl disable --now "${SERVICE_NAME}" "${GATEWAY_SERVICE}" "${TUNNEL_SERVICE}" 2>/dev/null || true
+  else
+    stop_background panel
+    stop_background gateway
+    stop_background tunnel
+  fi
   rm -f "${SERVICE_FILE}" "${GATEWAY_FILE}" "${TUNNEL_FILE}" "${ENV_FILE}"
-  systemctl daemon-reload
+  if has_systemd; then systemctl daemon-reload; fi
   rm -rf "${INSTALL_DIR}"
   say "OMCP removed. Node.js and system packages were left installed."
 }
