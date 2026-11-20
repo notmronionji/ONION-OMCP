@@ -20,7 +20,12 @@ REPO_URL="https://github.com/notmronionji/ONION-OMCP.git"
 
 say() { printf '\033[1;32m[OMCP]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[OMCP]\033[0m %s\n' "$*" >&2; }
-has_systemd() { [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; }
+has_systemd() {
+  [[ -d /run/systemd/system ]] || return 1
+  command -v systemctl >/dev/null 2>&1 || return 1
+  # Containers may expose the systemd runtime directory without running systemd as PID 1.
+  systemctl show-environment >/dev/null 2>&1
+}
 fail() { printf '\033[1;31m[OMCP ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 need_root() { [[ "${EUID}" -eq 0 ]] || fail "Run as root: sudo bash install.sh"; }
 need_debian() {
