@@ -194,6 +194,7 @@ build_app() {
   npm run build
   id omcp >/dev/null 2>&1 || useradd --system --home "${INSTALL_DIR}" --shell /usr/sbin/nologin omcp
   chown -R omcp:omcp "${INSTALL_DIR}"
+  if [[ -f "${ENV_FILE}" ]]; then chown root:omcp "${ENV_FILE}"; chmod 0640 "${ENV_FILE}"; fi
   write_panel_service
   write_gateway_service
   systemctl daemon-reload
@@ -210,6 +211,7 @@ install_panel() {
   apt-get install -y ca-certificates curl git openssl
   ensure_node
   prepare_source
+  id omcp >/dev/null 2>&1 || useradd --system --home "${INSTALL_DIR}" --shell /usr/sbin/nologin omcp
   configure_access "$mode"
   build_app
   say "OMCP Panel installed in ${mode} mode."
