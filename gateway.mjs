@@ -39,12 +39,14 @@ const server = http.createServer((req, res) => {
     return
   }
 
-  const headers = { ...req.headers, host: '127.0.0.1:6767' }
+  const isApi = req.url === '/api' || req.url.startsWith('/api/')
+  const upstreamPort = isApi ? 8765 : 6767
+  const headers = { ...req.headers, host: '127.0.0.1:' + upstreamPort }
   delete headers.authorization
   delete headers.cookie
   const upstream = http.request({
     hostname: '127.0.0.1',
-    port: 6767,
+    port: upstreamPort,
     method: req.method,
     path: req.url,
     headers,
