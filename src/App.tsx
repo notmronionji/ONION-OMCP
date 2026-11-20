@@ -1,20 +1,42 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
-  Activity, ArrowRight, ArrowUpRight, Bell, Blocks, Cable,
-  Check, ChevronDown, ChevronRight, CircleHelp, Cpu, FileCode2,
-  Globe2, HardDrive, LayoutDashboard, LifeBuoy, LockKeyhole, Menu, MoreHorizontal,
-  Network, Plus, RadioTower, Search, Server, Settings2, ShieldCheck, Sparkles,
-  Users, Wifi, X, Zap,
+  Activity, ArrowRight, ArrowUpRight, Bell, Blocks, Cable, Check, ChevronDown,
+  ChevronRight, CircleHelp, Cpu, FileCode2, Globe2, HardDrive, LayoutDashboard,
+  LifeBuoy, LockKeyhole, Menu, MoreHorizontal, Network, Plus, RadioTower, Search,
+  Server, Settings2, ShieldCheck, Sparkles, Users, Wifi, X, Zap,
 } from 'lucide-react'
 
 type Page = 'Overview' | 'Servers' | 'Routing' | 'Connectors' | 'Users' | 'Extensions' | 'Settings'
-type ServerItem = { name: string; game: string; address: string; state: 'Online' | 'Starting' | 'Offline'; cpu: number; ram: string; accent: string }
+type ServerItem = {
+  id: string; name: string; game: string; address: string; state: 'Online' | 'Offline'
+  cpu: number; ram: string; accent: string; software: string; version: string; memory: number; port: number
+}
+type CreatePayload = { name: string; software: string; version: string; memory: number; cpuLimit: number; port: number; eulaAccepted: boolean }
+type RouteInfo = { status?: string; provider?: string; address?: string | null; logs?: string }
 
-const initialServers: ServerItem[] = [
-  { name: 'Survival SMP', game: 'Paper · 1.21.4', address: 'play.onioncraft.net:25565', state: 'Online', cpu: 34, ram: '3.2 / 6 GB', accent: 'lime' },
-  { name: 'Skyblock Realm', game: 'Purpur · 1.21.1', address: 'sky.onioncraft.net:25566', state: 'Online', cpu: 18, ram: '2.1 / 4 GB', accent: 'violet' },
-  { name: 'Modded Origins', game: 'Fabric · 1.20.1', address: 'modded.onioncraft.net:25567', state: 'Starting', cpu: 0, ram: '—', accent: 'orange' },
-]
+async function api<T=any>(path: string, token = '', init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers || {})
+  if (token) headers.set('X-OMCP-Session', token)
+  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  let response: Response
+  try { response = await fetch(path, { ...init, headers }) }
+  catch { throw new Error('OMCP API तक connection नहीं हो पाया। Agent service और current panel link check करें।') }
+  const data = await response.json().catch(() => ({ error: 'OMCP API ने invalid response दिया। Agent log check करें।' }))
+  if (!response.ok) throw new Error(data.error || `API error HTTP ${response.status}`)
+  return data as T
+}
+
+function mapServer(s: any): ServerItem {
+  const software = String(s.software || 'paper').toLowerCase()
+  return {
+    id: s.id, name: s.name, software, version: s.version,
+    game: `${software[0].toUpperCase()+software.slice(1)} · ${s.version}`,
+    address: `127.0.0.1:${s.port}`,
+    state: s.status === 'running' ? 'Online' : 'Offline',
+    cpu: 0, ram: `${s.memory} GB`, accent: software === 'purpur' ? 'violet' : software === 'fabric' ? 'orange' : 'lime',
+    memory: Number(s.memory || 0), port: Number(s.port || 25565),
+  }
+}
 
 const navItems: { label: Page; icon: typeof LayoutDashboard; group: string }[] = [
   { label: 'Overview', icon: LayoutDashboard, group: 'WORKSPACE' },
@@ -28,160 +50,172 @@ const navItems: { label: Page; icon: typeof LayoutDashboard; group: string }[] =
 
 function App() {
   const [page, setPage] = useState<Page>('Overview')
-  const [servers, setServers] = useState(initialServers)
+  const [servers, setServers] = useState<ServerItem[]>([])
   const [createOpen, setCreateOpen] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
   const [search, setSearch] = useState('')
   const [notice, setNotice] = useState('')
+  const [token, setToken] = useState('')
+  const [username, setUsername] = useState('Administrator')
+  const [authReady, setAuthReady] = useState(false)
+  const [setupRequired, setSetupRequired] = useState(false)
 
   const filteredServers = useMemo(() => servers.filter(s => s.name.toLowerCase().includes(search.toLowerCase())), [servers, search])
-  const notify = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 3200) }
+  const notify = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 4000) }
+  const refreshServers = async (session = token) => {
+    const result = await api<{servers:any[]}>('/api/servers', session)
+    setServers(result.servers.map(mapServer))
+  }
+
+  useEffect(() => {
+    let alive = true
+    const saved = localStorage.getItem('omcp-session') || ''
+    ;(async () => {
+      const status = await api<{setupRequired:boolean}>('/api/setup/status')
+      if (!alive) return
+      setSetupRequired(status.setupRequired)
+      if (saved) {
+        try {
+          const me = await api<{user:{username:string}}>('/api/me', saved)
+          const list = await api<{servers:any[]}>('/api/servers', saved)
+          if (!alive) return
+          setToken(saved); setUsername(me.user.username); setServers(list.servers.map(mapServer))
+        } catch { localStorage.removeItem('omcp-session') }
+      }
+      if (alive) setAuthReady(true)
+    })().catch(e => { if (alive) { setNotice(e.message); setAuthReady(true) } })
+    return () => { alive = false }
+  }, [])
+
+  const authenticate = async (name: string, password: string) => {
+    const endpoint = setupRequired ? '/api/setup' : '/api/login'
+    const result = await api<{token:string;user:{username:string}}>(endpoint, '', { method:'POST', body:JSON.stringify({username:name,password}) })
+    localStorage.setItem('omcp-session', result.token)
+    setToken(result.token); setUsername(result.user.username)
+    await refreshServers(result.token)
+  }
+
+  const logout = async () => {
+    try { await api('/api/logout', token, {method:'POST',body:'{}'}) } catch {}
+    localStorage.removeItem('omcp-session'); setToken(''); setServers([])
+  }
+
+  const createServer = async (payload: CreatePayload) => {
+    const job = await api<{jobId:string}>('/api/servers', token, {method:'POST',body:JSON.stringify(payload)})
+    for (let attempt=0; attempt<300; attempt++) {
+      await new Promise(resolve => window.setTimeout(resolve, 1000))
+      const state = await api<{status:string;message:string;server?:any;error?:string}>(`/api/server-creation/${job.jobId}`, token)
+      if (state.status === 'failed') throw new Error(state.error || state.message || 'Server creation failed')
+      if (state.status === 'complete') {
+        await refreshServers()
+        setPage('Servers')
+        notify(`Server "${state.server?.name || payload.name}" successfully created. अब इसे Start कर सकते हैं।`)
+        return
+      }
+    }
+    throw new Error('Server download अभी भी चल रहा है। Servers page refresh करके status देखें।')
+  }
+
+  const toggleServer = async (server: ServerItem) => {
+    const action = server.state === 'Online' ? 'stop' : 'start'
+    try {
+      await api(`/api/servers/${server.id}/${action}`, token, {method:'POST',body:'{}'})
+      await refreshServers()
+      notify(action === 'start' ? 'Server start command भेज दिया गया।' : 'Server stop command भेज दिया गया।')
+    } catch(e) { notify((e as Error).message) }
+  }
+
+  if (!authReady) return <div className="auth-screen"><div className="auth-card"><div className="brand-name">OMCP<span>.</span></div><p>Connecting to your local Minecraft agent…</p></div></div>
+  if (!token) return <AuthScreen setupRequired={setupRequired} onSubmit={authenticate} error={notice}/>
 
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
-        <div className="brand-lockup">
-          <div className="brand-mark"><span>O</span><i /></div>
-          <div><div className="brand-name">OMCP<span>.</span></div><div className="brand-caption">ONION CONTROL PLANE</div></div>
-          <button className="icon-button sidebar-close" onClick={() => setMobileNav(false)} aria-label="Close menu"><X size={17}/></button>
-        </div>
-        <div className="workspace-switch">
-          <div className="workspace-avatar">OC</div>
-          <div className="workspace-copy"><b>OnionCraft</b><span>Personal workspace</span></div>
-          <ChevronDown size={15} className="muted-icon"/>
-        </div>
-        <nav className="main-nav">
-          {['WORKSPACE', 'INFRASTRUCTURE', 'MANAGEMENT', 'SYSTEM'].map(group => (
-            <div className="nav-group" key={group}>
-              <div className="nav-label">{group}</div>
-              {navItems.filter(item => item.group === group).map(item => {
-                const Icon = item.icon
-                return <button key={item.label} className={`nav-link ${page === item.label ? 'active' : ''}`} onClick={() => { setPage(item.label); setMobileNav(false) }}>
-                  <Icon size={17}/><span>{item.label}</span>{item.label === 'Routing' && <span className="nav-live-dot"/>}
-                  {item.label === 'Servers' && <small>{servers.length}</small>}
-                </button>
-              })}
-            </div>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="plan-card">
-            <div className="plan-icon"><Sparkles size={15}/></div>
-            <div><b>OMCP Core</b><span>Infrastructure status</span></div>
-            <span className="tiny-online">●</span>
-            <div className="plan-meter"><i/></div>
-            <small>Control plane initialized</small>
-          </div>
-          <button className="nav-link"><LifeBuoy size={17}/><span>Documentation</span><ArrowUpRight size={13} className="end-icon"/></button>
-          <div className="profile-row"><div className="profile-avatar">O</div><div className="profile-copy"><b>Administrator</b><span>Owner account</span></div><MoreHorizontal size={18} className="muted-icon"/></div>
-        </div>
+        <div className="brand-lockup"><div className="brand-mark"><span>O</span><i /></div><div><div className="brand-name">OMCP<span>.</span></div><div className="brand-caption">ONION CONTROL PLANE</div></div><button className="icon-button sidebar-close" onClick={() => setMobileNav(false)} aria-label="Close menu"><X size={17}/></button></div>
+        <div className="workspace-switch"><div className="workspace-avatar">OC</div><div className="workspace-copy"><b>OnionCraft</b><span>Personal workspace</span></div><ChevronDown size={15} className="muted-icon"/></div>
+        <nav className="main-nav">{['WORKSPACE','INFRASTRUCTURE','MANAGEMENT','SYSTEM'].map(group => <div className="nav-group" key={group}><div className="nav-label">{group}</div>{navItems.filter(item => item.group === group).map(item => { const Icon=item.icon; return <button key={item.label} className={`nav-link ${page===item.label?'active':''}`} onClick={()=>{setPage(item.label);setMobileNav(false)}}><Icon size={17}/><span>{item.label}</span>{item.label==='Routing'&&<span className="nav-live-dot"/>}{item.label==='Servers'&&<small>{servers.length}</small>}</button> })}</div>)}</nav>
+        <div className="sidebar-bottom"><div className="plan-card"><div className="plan-icon"><Sparkles size={15}/></div><div><b>OMCP Core</b><span>Local agent connected</span></div><span className="tiny-online">●</span><div className="plan-meter"><i/></div><small>Real server engine enabled</small></div><button className="nav-link"><LifeBuoy size={17}/><span>Documentation</span><ArrowUpRight size={13} className="end-icon"/></button><div className="profile-row"><div className="profile-avatar">O</div><div className="profile-copy"><b>{username}</b><span>Administrator</span></div><button className="icon-button" onClick={logout} title="Sign out"><LockKeyhole size={16}/></button></div></div>
       </aside>
-
-      {mobileNav && <button className="mobile-scrim" onClick={() => setMobileNav(false)} aria-label="Close navigation"/>}
+      {mobileNav && <button className="mobile-scrim" onClick={()=>setMobileNav(false)} aria-label="Close navigation"/>}
       <main className="main-area">
-        <header className="topbar">
-          <div className="topbar-left"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Open menu"><Menu size={19}/></button><div className="breadcrumb">Workspace <ChevronRight size={13}/> <b>{page}</b></div></div>
-          <div className="topbar-actions">
-            <div className="system-pill"><span/>All systems nominal</div>
-            <button className="icon-button" aria-label="Help"><CircleHelp size={17}/></button>
-            <button className="icon-button notification-button" onClick={() => notify('You are all caught up.')} aria-label="Notifications"><Bell size={17}/><i/></button>
-            <div className="top-avatar">O</div>
-          </div>
-        </header>
-
+        <header className="topbar"><div className="topbar-left"><button className="icon-button mobile-menu" onClick={()=>setMobileNav(true)} aria-label="Open menu"><Menu size={19}/></button><div className="breadcrumb">Workspace <ChevronRight size={13}/> <b>{page}</b></div></div><div className="topbar-actions"><div className="system-pill"><span/>Agent connected</div><button className="icon-button" aria-label="Help"><CircleHelp size={17}/></button><button className="icon-button notification-button" onClick={()=>notify('You are all caught up.')} aria-label="Notifications"><Bell size={17}/><i/></button><div className="top-avatar">O</div></div></header>
         <div className="page-content">
-          {page === 'Overview' && <Overview servers={servers} onCreate={() => setCreateOpen(true)} onNavigate={setPage} />}
-          {page === 'Servers' && <ServersPage servers={filteredServers} search={search} setSearch={setSearch} onCreate={() => setCreateOpen(true)} />}
-          {page === 'Routing' && <RoutingPage />}
-          {page === 'Connectors' && <ConnectorsPage />}
-          {page === 'Users' && <PlaceholderPage title="Users & access" icon={Users} description="Manage panel accounts, roles and server-level permissions." />}
-          {page === 'Extensions' && <PlaceholderPage title="Extensions" icon={Blocks} description="Extend OMCP with reviewed integrations and automation." />}
-          {page === 'Settings' && <PlaceholderPage title="System settings" icon={Settings2} description="Configure panel identity, security and platform preferences." />}
-          <footer className="page-footer"><span>OMCP Panel <b>v0.1.0 · Early access</b></span><span><i/> Control plane UI ready <span className="footer-sep">·</span> Built for your infrastructure</span></footer>
+          {page==='Overview'&&<Overview servers={servers} onCreate={()=>setCreateOpen(true)} onNavigate={setPage}/>}
+          {page==='Servers'&&<ServersPage servers={filteredServers} search={search} setSearch={setSearch} onCreate={()=>setCreateOpen(true)} onToggle={toggleServer}/>}
+          {page==='Routing'&&<RoutingPage servers={servers} token={token} onRefresh={refreshServers} notify={notify}/>}
+          {page==='Connectors'&&<ConnectorsPage/>}
+          {page==='Users'&&<PlaceholderPage title="Users & access" icon={Users} description="Manage panel accounts, roles and server-level permissions."/>}
+          {page==='Extensions'&&<PlaceholderPage title="Extensions" icon={Blocks} description="Extend OMCP with reviewed integrations and automation."/>}
+          {page==='Settings'&&<PlaceholderPage title="System settings" icon={Settings2} description="Configure panel identity, security and platform preferences."/>}
+          <footer className="page-footer"><span>OMCP Panel <b>v0.2.0 · Agent build</b></span><span><i/> Local Minecraft agent online <span className="footer-sep">·</span> Real server provisioning</span></footer>
         </div>
       </main>
-
-      {createOpen && <CreateServerModal onClose={() => setCreateOpen(false)} onCreate={(server) => { setServers(current => [server, ...current]); setCreateOpen(false); setPage('Servers'); notify('Server added to the local panel preview.') }} />}
-      {notice && <div className="toast"><Check size={16}/>{notice}</div>}
+      {createOpen&&<CreateServerModal onClose={()=>setCreateOpen(false)} onCreate={createServer}/>}
+      {notice&&<div className="toast"><Check size={16}/>{notice}</div>}
     </div>
   )
 }
 
-function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
+function AuthScreen({setupRequired,onSubmit,error}:{setupRequired:boolean;onSubmit:(u:string,p:string)=>Promise<void>;error:string}) {
+  const [name,setName]=useState('admin'),[password,setPassword]=useState(''),[busy,setBusy]=useState(false),[localError,setLocalError]=useState('')
+  const submit=async(e:React.FormEvent)=>{e.preventDefault();setBusy(true);setLocalError('');try{await onSubmit(name,password)}catch(err){setLocalError((err as Error).message)}finally{setBusy(false)}}
+  return <div className="auth-screen"><form className="auth-card" onSubmit={submit}><div className="brand-name">OMCP<span>.</span></div><div className="eyebrow">ONION MINECRAFT CONTROL PANEL</div><h1>{setupRequired?'Create administrator':'Welcome back'}</h1><p>{setupRequired?'पहली बार setup: अपना admin username और मजबूत password बनाएं।':'अपने OMCP administrator account से sign in करें।'}</p><label className="field-label">Username<input value={name} onChange={e=>setName(e.target.value)} minLength={3} maxLength={24} required autoComplete="username"/></label><label className="field-label">Password<input type="password" value={password} onChange={e=>setPassword(e.target.value)} minLength={setupRequired?12:1} required autoComplete={setupRequired?'new-password':'current-password'}/></label>{(localError||error)&&<div className="auth-error">{localError||error}</div>}<button className="primary-button auth-submit" disabled={busy}>{busy?'Please wait…':setupRequired?'Create secure account':'Sign in'} <ArrowRight size={15}/></button>{setupRequired&&<small className="muted">Password कम से कम 12 characters का होना चाहिए।</small>}</form></div>
+}
+
+function PageHeading({eyebrow,title,description,action}:{eyebrow:string;title:string;description:string;action?:ReactNode}) {
   return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{action}</div>
 }
 
-function Overview({ servers, onCreate, onNavigate }: { servers: ServerItem[]; onCreate: () => void; onNavigate: (page: Page) => void }) {
-  return <>
-    <PageHeading eyebrow="CONTROL CENTER / OVERVIEW" title="Good evening, Admin." description="Here's what's happening across your Minecraft infrastructure." action={<button className="primary-button" onClick={onCreate}><Plus size={16}/> Create server</button>}/>
-    <div className="welcome-strip"><div className="welcome-glow"/><div className="welcome-icon"><Zap size={19}/></div><div className="welcome-copy"><b>Your infrastructure, one command away.</b><span>Connect a host, deploy a server, and let OMCP handle the routing.</span></div><button onClick={() => onNavigate('Connectors')}>Explore connectors <ArrowRight size={15}/></button><div className="strip-orbit orbit-one"/><div className="strip-orbit orbit-two"/></div>
-    <div className="section-row"><div><div className="section-title">Infrastructure at a glance</div><div className="section-subtitle">Live resource overview <span className="live-label"><i/> PREVIEW DATA</span></div></div><button className="subtle-button" onClick={() => onNavigate('Connectors')}>View infrastructure <ArrowUpRight size={14}/></button></div>
-    <div className="stats-grid">
-      <StatCard icon={Server} label="Total servers" value={String(servers.length).padStart(2, '0')} meta="Across all connectors" tone="green" chart={[25,38,31,52,42,66,54,72,63,85,69,92]}/>
-      <StatCard icon={Activity} label="Online servers" value={String(servers.filter(s => s.state === 'Online').length).padStart(2, '0')} meta="Current panel preview" tone="blue" chart={[42,36,48,44,58,52,69,61,73,68,84,78]}/>
-      <StatCard icon={Cpu} label="CPU allocation" value="52%" meta="Illustrative dashboard value" tone="purple" chart={[30,40,35,58,49,61,55,70,65,77,68,83]}/>
-      <StatCard icon={HardDrive} label="Memory allocated" value="5.3 GB" meta="Illustrative dashboard value" tone="orange" chart={[20,32,28,45,39,51,47,60,54,68,62,76]}/>
-    </div>
-    <div className="content-grid">
-      <section className="panel-card servers-panel">
-        <div className="panel-heading"><div><h2>Recent servers</h2><p>Your latest server instances</p></div><button className="text-button" onClick={() => onNavigate('Servers')}>View all <ArrowRight size={14}/></button></div>
-        <div className="server-list">{servers.slice(0, 3).map(server => <ServerRow key={server.name} server={server}/>)}</div>
-        <button className="add-server-row" onClick={onCreate}><span><Plus size={16}/></span> Create another server</button>
-      </section>
-      <section className="panel-card network-panel">
-        <div className="panel-heading"><div><h2>Network overview</h2><p>Routing layer status</p></div><span className="status-chip pending">NOT CONNECTED</span></div>
-        <div className="network-visual"><div className="network-ring ring-a"/><div className="network-ring ring-b"/><div className="network-center"><Globe2 size={25}/><span>OMCP</span></div><div className="network-node node-top"><RadioTower size={14}/></div><div className="network-node node-left"><Server size={14}/></div><div className="network-node node-right"><Network size={14}/></div></div>
-        <div className="network-foot"><div><span className="foot-dot amber"/> Routing gateway <b>Not configured</b></div><button onClick={() => onNavigate('Routing')}>Configure <ArrowRight size={13}/></button></div>
-      </section>
-    </div>
-    <div className="bottom-grid">
-      <section className="panel-card activity-panel"><div className="panel-heading"><div><h2>Activity feed</h2><p>Recent control-plane events</p></div><button className="icon-button"><MoreHorizontal size={17}/></button></div><div className="empty-activity"><div className="empty-icon"><Activity size={19}/></div><b>No activity yet</b><span>Events from connected services will appear here.</span></div></section>
-      <section className="panel-card quick-panel"><div className="panel-heading"><div><h2>Quick actions</h2><p>Common infrastructure tasks</p></div></div><div className="quick-actions"><button onClick={() => onNavigate('Connectors')}><span className="quick-icon purple"><Cable size={17}/></span><span><b>Connect a host</b><small>Register an OMCP Connector</small></span><ChevronRight size={16}/></button><button onClick={() => onNavigate('Routing')}><span className="quick-icon blue"><Network size={17}/></span><span><b>Set up routing</b><small>Configure public endpoints</small></span><ChevronRight size={16}/></button><button onClick={onCreate}><span className="quick-icon green"><Plus size={17}/></span><span><b>Deploy a server</b><small>Create a Minecraft instance</small></span><ChevronRight size={16}/></button></div></section>
-    </div>
+function Overview({servers,onCreate,onNavigate}:{servers:ServerItem[];onCreate:()=>void;onNavigate:(p:Page)=>void}) {
+  const online=servers.filter(s=>s.state==='Online').length
+  const memory=servers.reduce((n,s)=>n+s.memory,0)
+  return <><PageHeading eyebrow="CONTROL CENTER / OVERVIEW" title="Good evening, Admin." description="Your actual Minecraft instances and local host status." action={<button className="primary-button" onClick={onCreate}><Plus size={16}/> Create server</button>}/>
+    <div className="welcome-strip"><div className="welcome-glow"/><div className="welcome-icon"><Zap size={19}/></div><div className="welcome-copy"><b>Real server provisioning is connected.</b><span>OMCP downloads server software onto this host and manages the Java process.</span></div><button onClick={()=>onNavigate('Servers')}>View servers <ArrowRight size={15}/></button><div className="strip-orbit orbit-one"/><div className="strip-orbit orbit-two"/></div>
+    <div className="stats-grid"><StatCard icon={Server} label="Created servers" value={String(servers.length).padStart(2,'0')} meta="Stored on this host" tone="green"/><StatCard icon={Activity} label="Running servers" value={String(online).padStart(2,'0')} meta="Live process detection" tone="blue"/><StatCard icon={Cpu} label="Allocated memory" value={memory+' GB'} meta="Across created instances" tone="purple"/><StatCard icon={HardDrive} label="Provisioning" value="Ready" meta="Paper, Purpur, Fabric, Vanilla+" tone="orange"/></div>
+    <div className="content-grid"><section className="panel-card servers-panel"><div className="panel-heading"><div><h2>Recent servers</h2><p>Instances created on this host</p></div><button className="text-button" onClick={()=>onNavigate('Servers')}>View all <ArrowRight size={14}/></button></div><div className="server-list">{servers.slice(0,4).map(s=><ServerRow key={s.id} server={s}/>)}</div>{!servers.length&&<div className="empty-activity"><b>No servers created yet</b><span>Click Create server to download and install your first Minecraft server.</span></div>}<button className="add-server-row" onClick={onCreate}><span><Plus size={16}/></span> Create another server</button></section><section className="panel-card network-panel"><div className="panel-heading"><div><h2>Network overview</h2><p>Per-server TCP routing</p></div><span className="status-chip pending">ON DEMAND</span></div><div className="network-visual"><div className="network-ring ring-a"/><div className="network-ring ring-b"/><div className="network-center"><Globe2 size={25}/><span>OMCP</span></div><div className="network-node node-top"><RadioTower size={14}/></div><div className="network-node node-left"><Server size={14}/></div><div className="network-node node-right"><Network size={14}/></div></div><div className="network-foot"><div><span className="foot-dot amber"/> Routes <b>Start after server creation</b></div><button onClick={()=>onNavigate('Routing')}>Manage <ArrowRight size={13}/></button></div></section></div>
   </>
 }
 
-function StatCard({ icon: Icon, label, value, meta, tone, chart }: { icon: typeof Server; label: string; value: string; meta: string; tone: string; chart: number[] }) {
-  return <div className="stat-card"><div className="stat-top"><span className={`stat-icon ${tone}`}><Icon size={17}/></span><span className="stat-period">LAST 12 POINTS</span></div><div className="stat-value">{value}</div><div className="stat-label">{label}</div><div className="stat-bottom"><span>{meta}</span><div className="mini-chart">{chart.map((n, i) => <i key={i} style={{ height: `${n}%` }}/>)}</div></div></div>
+function StatCard({icon:Icon,label,value,meta,tone}:{icon:typeof Server;label:string;value:string;meta:string;tone:string}) {
+  return <div className="stat-card"><div className="stat-top"><span className={`stat-icon ${tone}`}><Icon size={17}/></span><span className="stat-period">LIVE</span></div><div className="stat-value">{value}</div><div className="stat-label">{label}</div><div className="stat-bottom"><span>{meta}</span></div></div>
 }
 
-function ServerRow({ server }: { server: ServerItem }) {
-  return <div className="server-row"><div className={`game-icon ${server.accent}`}><span>{server.game.startsWith('Paper') ? 'P' : server.game.startsWith('Purpur') ? '✦' : 'F'}</span></div><div className="server-info"><b>{server.name}</b><span>{server.game}</span></div><div className="server-address"><Globe2 size={12}/>{server.address}</div><div className={`server-state ${server.state.toLowerCase()}`}><i/>{server.state}</div><button className="icon-button row-more" aria-label={`More about ${server.name}`}><MoreHorizontal size={17}/></button></div>
+function ServerRow({server}:{server:ServerItem}) {
+  return <div className="server-row"><div className={`game-icon ${server.accent}`}><span>{server.software==='paper'?'P':server.software==='purpur'?'✦':'M'}</span></div><div className="server-info"><b>{server.name}</b><span>{server.game}</span></div><div className="server-address"><Globe2 size={12}/>{server.address}</div><div className={`server-state ${server.state.toLowerCase()}`}><i/>{server.state}</div></div>
 }
 
-function ServersPage({ servers, search, setSearch, onCreate }: { servers: ServerItem[]; search: string; setSearch: (v: string) => void; onCreate: () => void }) {
-  return <><PageHeading eyebrow="WORKSPACE / SERVERS" title="Your servers" description="Manage game instances, resources and server access." action={<button className="primary-button" onClick={onCreate}><Plus size={16}/> Create server</button>}/><div className="toolbar"><div className="search-box"><Search size={16}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search servers..."/></div><button className="filter-button"><span/> All statuses <ChevronDown size={14}/></button></div><section className="panel-card full-table"><div className="table-head"><span>SERVER</span><span>ADDRESS</span><span>STATUS</span><span>CPU</span><span>MEMORY</span><span/></div>{servers.map(s => <div className="table-row" key={s.name}><div className="table-server"><div className={`game-icon ${s.accent}`}>{s.game.startsWith('Paper') ? 'P' : s.game.startsWith('Purpur') ? '✦' : 'F'}</div><div><b>{s.name}</b><small>{s.game}</small></div></div><span className="table-address">{s.address}</span><span className={`server-state ${s.state.toLowerCase()}`}><i/>{s.state}</span><span>{s.cpu ? `${s.cpu}%` : '—'}</span><span>{s.ram}</span><button className="icon-button"><MoreHorizontal size={17}/></button></div>)}{servers.length === 0 && <div className="empty-activity"><b>No matching servers</b><span>Try another search or create a new server.</span></div>}</section></>
+function ServersPage({servers,search,setSearch,onCreate,onToggle}:{servers:ServerItem[];search:string;setSearch:(v:string)=>void;onCreate:()=>void;onToggle:(s:ServerItem)=>void}) {
+  return <><PageHeading eyebrow="WORKSPACE / SERVERS" title="Your servers" description="Real Minecraft server folders, Java processes and resource allocations." action={<button className="primary-button" onClick={onCreate}><Plus size={16}/> Create server</button>}/><div className="toolbar"><div className="search-box"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search servers..."/></div><span className="pill">{servers.length} instances</span></div><section className="panel-card full-table"><div className="table-head"><span>SERVER</span><span>LOCAL ADDRESS</span><span>STATUS</span><span>CPU</span><span>MEMORY</span><span>ACTION</span></div>{servers.map(s=><div className="table-row" key={s.id}><div className="table-server"><div className={`game-icon ${s.accent}`}>{s.software==='paper'?'P':s.software==='purpur'?'✦':'M'}</div><div><b>{s.name}</b><small>{s.game}</small></div></div><span className="table-address">{s.address}</span><span className={`server-state ${s.state.toLowerCase()}`}><i/>{s.state}</span><span>—</span><span>{s.ram}</span><button className="secondary-button server-power" onClick={()=>onToggle(s)}>{s.state==='Online'?'Stop':'Start'}</button></div>)}{servers.length===0&&<div className="empty-activity"><b>No servers found</b><span>There are no matching real server instances. Create one to begin.</span></div>}</section></>
 }
 
-function RoutingPage() {
-  return <><PageHeading eyebrow="INFRASTRUCTURE / NETWORK" title="Routing & tunnels" description="Manage public endpoints, shared IP allocations and secure Connector tunnels." action={<button className="primary-button" onClick={() => alert('Routing gateway setup will be available after the routing service is implemented.')}><Plus size={16}/> Add endpoint</button>}/><div className="routing-warning"><LockKeyhole size={18}/><div><b>Routing engine is not connected</b><span>This is the configuration UI foundation. No public ports are allocated and no traffic is being proxied yet.</span></div><span className="status-chip pending">OFFLINE</span></div><div className="stats-grid routing-stats"><StatCard icon={Globe2} label="Public endpoints" value="00" meta="No gateways registered" tone="blue" chart={[10,10,10,10,10,10,10,10,10,10,10,10]}/><StatCard icon={Cable} label="Allocated ports" value="00" meta="No allocations yet" tone="purple" chart={[10,10,10,10,10,10,10,10,10,10,10,10]}/><StatCard icon={Wifi} label="Active tunnels" value="00" meta="Waiting for Connector" tone="green" chart={[10,10,10,10,10,10,10,10,10,10,10,10]}/><StatCard icon={ShieldCheck} label="Tunnel security" value="—" meta="Not initialized" tone="orange" chart={[10,10,10,10,10,10,10,10,10,10,10,10]}/></div><section className="panel-card routing-empty"><div className="empty-icon"><Network size={22}/></div><h2>No routing endpoints configured</h2><p>Add a gateway with a reachable public IPv4 or IPv6 address. Private-only and IPv6-only hosts can use a public relay through an authenticated outbound tunnel.</p><div className="routing-tags"><span>IPv4 relay</span><span>IPv6 native</span><span>Dual stack</span><span>TCP proxy</span></div></section></>
+function RoutingPage({servers,token,onRefresh,notify}:{servers:ServerItem[];token:string;onRefresh:()=>Promise<void>;notify:(s:string)=>void}) {
+  const [providers,setProviders]=useState<Record<string,string>>({})
+  const [routes,setRoutes]=useState<Record<string,RouteInfo>>({})
+  const [busy,setBusy]=useState('')
+  useEffect(()=>{let active=true;(async()=>{const entries=await Promise.all(servers.map(async s=>{try{return [s.id,await api<RouteInfo>(`/api/servers/${s.id}/tunnel`,token)] as const}catch{return [s.id,{status:'unknown'}] as const}}));if(active)setRoutes(Object.fromEntries(entries))})();return()=>{active=false}},[servers,token])
+  const run=async(s:ServerItem,action:'start'|'stop')=>{const key=s.id;setBusy(key);try{const provider=providers[key]||'minekube';const result=await api<RouteInfo>(`/api/servers/${key}/tunnel/${action}`,token,{method:'POST',body:JSON.stringify({provider})});setRoutes(old=>({...old,[key]:result}));notify(action==='start'?'Routing request submitted.':'Route stopped.');await onRefresh()}catch(e){notify((e as Error).message)}finally{setBusy('')}}
+  return <><PageHeading eyebrow="INFRASTRUCTURE / NETWORK" title="Routing & tunnels" description="Game TCP routes are configured per created server, separately from the web-panel HTTPS link."/><div className="routing-warning"><LockKeyhole size={18}/><div><b>Panel tunnel and Minecraft routes are separate</b><span>Cloudflare Quick Tunnel exposes this web panel only. Minecraft players need a TCP route from Minekube Connect, Bore or Pinggy.</span></div><span className="status-chip pending">TCP</span></div>{servers.length===0?<section className="panel-card routing-empty"><div className="empty-icon"><Network size={22}/></div><h2>Create a server first</h2><p>Once a Minecraft instance exists, its own routing controls will appear here. Start the server before using Bore or Pinggy.</p></section>:<div className="routing-server-list">{servers.map(s=>{const route=routes[s.id]||{};const provider=providers[s.id]||'minekube';const active=route.status==='running'||route.status==='installed'||route.status==='starting';return <section className="panel-card route-server-card" key={s.id}><div className="panel-heading"><div><h2>{s.name}</h2><p>{s.game} · local port {s.port}</p></div><span className={`status-chip ${active?'connected':'pending'}`}>{(route.status||'loading').toUpperCase()}</span></div><div className="route-controls"><label className="field-label">TCP provider<select value={provider} onChange={e=>setProviders(old=>({...old,[s.id]:e.target.value}))}><option value="minekube">Minekube Connect</option><option value="bore">Bore</option><option value="pinggy">Pinggy</option></select></label><div className="route-address"><small>Public game address</small><b>{route.address||'Not connected yet'}</b></div><button className="primary-button" disabled={busy===s.id} onClick={()=>run(s,active?'stop':'start')}>{busy===s.id?'Working…':active?'Stop route':'Start route'}</button></div>{route.logs&&<details className="route-logs"><summary>Provider details</summary><pre>{route.logs}</pre></details>}<p className="muted route-help">{provider==='minekube'?'Installs the Minekube Connect plugin. Start/restart the Minecraft server to obtain its public address.':s.state!=='Online'?'Start this server first; this TCP relay waits for its game port to accept connections.':'Starts a temporary TCP relay to this server port.'}</p></section>})}</div>}</>
 }
 
 function ConnectorsPage() {
-  return <><PageHeading eyebrow="INFRASTRUCTURE / HOSTS" title="OMCP Connectors" description="Securely enroll VPS hosts to deploy and manage Minecraft servers." action={<button className="primary-button" onClick={() => alert('Connector enrollment will be enabled with the API service.')}><Plus size={16}/> Enroll connector</button>}/><div className="routing-warning"><ShieldCheck size={18}/><div><b>No connectors enrolled</b><span>Connector enrollment and host operations become available after the API and Connector services are implemented.</span></div><span className="status-chip pending">0 CONNECTED</span></div><section className="panel-card routing-empty"><div className="empty-icon"><Cable size={22}/></div><h2>Your infrastructure starts here</h2><p>Each Connector will securely report host capacity, IPv4/IPv6 capability, server inventory and health. OMCP will not expose arbitrary shell access to panel users.</p><div className="routing-tags"><span>Outbound TLS</span><span>Host telemetry</span><span>Scoped commands</span></div></section></>
+  return <><PageHeading eyebrow="INFRASTRUCTURE / HOSTS" title="OMCP Connectors" description="Securely enroll additional VPS hosts to deploy and manage Minecraft servers."/><div className="routing-warning"><ShieldCheck size={18}/><div><b>Single-host agent is active</b><span>Remote multi-host enrollment is a separate control-plane feature and is not enabled in this build.</span></div><span className="status-chip pending">LOCAL</span></div><section className="panel-card routing-empty"><div className="empty-icon"><Cable size={22}/></div><h2>Your local host is connected</h2><p>This build provisions servers on the machine where OMCP is installed.</p><div className="routing-tags"><span>Loopback API</span><span>Java process control</span><span>Persistent data folder</span></div></section></>
 }
 
-function PlaceholderPage({ title, icon: Icon, description }: { title: string; icon: typeof Users; description: string }) {
-  return <><PageHeading eyebrow={`OMCP / ${title.toUpperCase()}`} title={title} description={description}/><section className="panel-card routing-empty"><div className="empty-icon"><Icon size={22}/></div><h2>Coming in the next build phase</h2><p>This section is part of the OMCP product structure. Its backend workflows and permission checks have not been implemented yet.</p></section></>
+function PlaceholderPage({title,icon:Icon,description}:{title:string;icon:typeof Users;description:string}) {
+  return <><PageHeading eyebrow={`OMCP / ${title.toUpperCase()}`} title={title} description={description}/><section className="panel-card routing-empty"><div className="empty-icon"><Icon size={22}/></div><h2>Coming in a later build phase</h2><p>This section is not wired to the local agent yet.</p></section></>
 }
 
-function CreateServerModal({ onClose, onCreate }: { onClose: () => void; onCreate: (server: ServerItem) => void }) {
-  const [step, setStep] = useState(0)
-  const [name, setName] = useState('')
-  const [software, setSoftware] = useState('Paper')
-  const [version, setVersion] = useState('1.21.4')
-  const [connector, setConnector] = useState('auto')
-  const [ipMode, setIpMode] = useState('shared')
-  const [routeMode, setRouteMode] = useState('tunnel')
-  const [port, setPort] = useState('25565')
-  const [tunnel, setTunnel] = useState(true)
-  const steps = ['Game setup', 'Host & resources', 'Network & routing']
-  const submit = () => onCreate({ name: name.trim(), game: `${software} · ${version}`, address: ipMode === 'shared' ? `play.example.net:${port}` : `pending:${port}`, state: 'Offline', cpu: 0, ram: '0 / 4 GB', accent: 'lime' })
-  return <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}><div className="create-modal" role="dialog" aria-modal="true" aria-labelledby="create-title"><div className="modal-top"><div><div className="eyebrow">NEW INSTANCE / CONFIGURATION</div><h2 id="create-title">Create a server</h2><p>Configure your game, host and public network route.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19}/></button></div><div className="stepper">{steps.map((s, i) => <button key={s} className={i === step ? 'step active' : i < step ? 'step complete' : 'step'} onClick={() => setStep(i)}><span>{i < step ? <Check size={13}/> : i + 1}</span>{s}</button>)}</div>
-    {step === 0 && <div className="form-body"><label className="field-label">Server name<input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Survival SMP" autoFocus/></label><div className="field-grid"><label className="field-label">Server software<select value={software} onChange={e => setSoftware(e.target.value)}><option>Paper</option><option>Vanilla</option><option>Purpur</option><option>Fabric</option><option>Forge</option><option>NeoForge</option></select></label><label className="field-label">Game version<select value={version} onChange={e => setVersion(e.target.value)}><option>1.21.4</option><option>1.21.1</option><option>1.20.1</option><option>1.20.4</option><option>1.19.4</option></select></label></div><div className="info-callout"><FileCode2 size={16}/><span>Software downloads and checksum verification will be handled by the OMCP API during deployment.</span></div></div>}
-    {step === 1 && <div className="form-body"><label className="field-label">OMCP Connector<select value={connector} onChange={e => setConnector(e.target.value)}><option value="auto">Automatic (best available)</option><option value="none">No connector enrolled yet</option></select></label><div className="field-grid"><label className="field-label">Memory allocation<select><option>4 GB</option><option>2 GB</option><option>6 GB</option><option>8 GB</option><option>12 GB</option></select></label><label className="field-label">CPU limit<select><option>200% (2 cores)</option><option>100% (1 core)</option><option>300% (3 cores)</option><option>400% (4 cores)</option></select></label></div><label className="field-label">Disk allocation<select><option>20 GB</option><option>10 GB</option><option>40 GB</option><option>80 GB</option></select></label><div className="info-callout"><Cpu size={16}/><span>Capacity will be validated against live Connector telemetry before any server is created.</span></div></div>}
-    {step === 2 && <div className="form-body"><div className="network-section-title"><Globe2 size={16}/> Public address strategy</div><div className="choice-grid"><button className={ipMode === 'shared' ? 'choice-card selected' : 'choice-card'} onClick={() => setIpMode('shared')}><span className="choice-check">{ipMode === 'shared' && <Check size={12}/>}</span><b>Shared IP + port</b><small>Route through an OMCP public gateway. Ideal for private or IPv6-only VPS hosts.</small><em>RECOMMENDED</em></button><button className={ipMode === 'dedicated' ? 'choice-card selected' : 'choice-card'} onClick={() => setIpMode('dedicated')}><span className="choice-check">{ipMode === 'dedicated' && <Check size={12}/>}</span><b>Dedicated IP</b><small>Use a directly reachable public address assigned to the Connector host.</small></button></div><div className="field-grid"><label className="field-label">Routing mode<select value={routeMode} onChange={e => setRouteMode(e.target.value)}><option value="tunnel">Authenticated tunnel</option><option value="direct">Direct public route</option></select></label><label className="field-label">Public port<input value={port} onChange={e => setPort(e.target.value)} inputMode="numeric" placeholder="25565"/></label></div><label className="toggle-row"><span><b>Enable secure Connector tunnel</b><small>Encrypted outbound tunnel with scoped route registration.</small></span><input type="checkbox" checked={tunnel} onChange={e => setTunnel(e.target.checked)}/></label><div className="info-callout"><LockKeyhole size={16}/><span>Routing is a planned integration. No port is reserved and no tunnel is established by this UI preview.</span></div></div>}
-    <div className="modal-footer"><span className="step-caption">STEP {step + 1} OF 3</span><div>{step > 0 && <button className="secondary-button" onClick={() => setStep(step - 1)}>Back</button>}{step < 2 ? <button className="primary-button" disabled={step === 0 && !name.trim()} onClick={() => setStep(step + 1)}>Continue <ArrowRight size={15}/></button> : <button className="primary-button" disabled={!name.trim() || !port.trim()} onClick={submit}><Plus size={15}/> Create preview</button>}</div></div>
+function CreateServerModal({onClose,onCreate}:{onClose:()=>void;onCreate:(p:CreatePayload)=>Promise<void>}) {
+  const [step,setStep]=useState(0),[name,setName]=useState(''),[software,setSoftware]=useState('paper'),[version,setVersion]=useState('1.21.4')
+  const [memory,setMemory]=useState('2'),[cpuLimit,setCpuLimit]=useState('0'),[port,setPort]=useState('25565'),[eula,setEula]=useState(false)
+  const [busy,setBusy]=useState(false),[error,setError]=useState('')
+  const steps=['Game setup','Resources & EULA']
+  const submit=async()=>{setBusy(true);setError('');try{await onCreate({name:name.trim(),software,version:version.trim(),memory:Number(memory),cpuLimit:Number(cpuLimit),port:Number(port),eulaAccepted:eula});onClose()}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
+  return <div className="modal-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget&&!busy)onClose()}}><div className="create-modal" role="dialog" aria-modal="true" aria-labelledby="create-title"><div className="modal-top"><div><div className="eyebrow">NEW INSTANCE / REAL DEPLOYMENT</div><h2 id="create-title">Create a server</h2><p>OMCP will download the selected server JAR and prepare its files on this host.</p></div><button className="icon-button" onClick={onClose} aria-label="Close" disabled={busy}><X size={19}/></button></div><div className="stepper">{steps.map((s,i)=><button key={s} className={i===step?'step active':i<step?'step complete':'step'} onClick={()=>!busy&&setStep(i)}><span>{i<step?<Check size={13}/>:i+1}</span>{s}</button>)}</div>
+    {step===0&&<div className="form-body"><label className="field-label">Server name<input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Survival SMP" autoFocus maxLength={24}/></label><div className="field-grid"><label className="field-label">Server software<select value={software} onChange={e=>setSoftware(e.target.value)}><option value="paper">Paper</option><option value="purpur">Purpur</option><option value="folia">Folia</option><option value="spigot">Spigot</option><option value="fabric">Fabric</option><option value="vanilla">Vanilla</option><option value="velocity">Velocity proxy</option><option value="waterfall">Waterfall proxy</option></select></label><label className="field-label">Minecraft version<input value={version} onChange={e=>setVersion(e.target.value)} placeholder="1.21.4"/></label></div><div className="info-callout"><FileCode2 size={16}/><span>Supported builds are fetched from the official PaperMC, Purpur, Fabric, Spigot or Mojang download APIs.</span></div></div>}
+    {step===1&&<div className="form-body"><div className="field-grid"><label className="field-label">RAM allocation (GB)<input type="number" min="1" value={memory} onChange={e=>setMemory(e.target.value)}/></label><label className="field-label">CPU limit (%)<input type="number" min="0" max="10000" value={cpuLimit} onChange={e=>setCpuLimit(e.target.value)}/></label></div><label className="field-label">Minecraft port<input type="number" min="1024" max="65535" value={port} onChange={e=>setPort(e.target.value)}/></label><label className="toggle-row"><span><b>I accept the Minecraft EULA</b><small>Read the <a href="https://www.minecraft.net/eula" target="_blank" rel="noreferrer">official Minecraft EULA</a> before creating a game server.</small></span><input type="checkbox" checked={eula} onChange={e=>setEula(e.target.checked)}/></label><div className="info-callout"><Cpu size={16}/><span>OMCP validates available host RAM, unique server name and port before downloading the actual server JAR.</span></div></div>}
+    {error&&<div className="form-error">{error}</div>}
+    <div className="modal-footer"><span className="step-caption">STEP {step+1} OF 2</span><div>{step>0&&<button className="secondary-button" disabled={busy} onClick={()=>setStep(0)}>Back</button>}{step===0?<button className="primary-button" disabled={!name.trim()||!version.trim()} onClick={()=>setStep(1)}>Continue <ArrowRight size={15}/></button>:<button className="primary-button" disabled={busy||!eula||!name.trim()||!Number(memory)||!Number(port)} onClick={submit}><Plus size={15}/>{busy?'Creating server…':'Create real server'}</button>}</div></div>
   </div></div>
 }
 
