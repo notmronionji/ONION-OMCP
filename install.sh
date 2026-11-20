@@ -115,8 +115,8 @@ write_gateway_service() {
   cat > "${GATEWAY_FILE}" <<UNIT
 [Unit]
 Description=OMCP authenticated access gateway
-After=network.target ${SERVICE_NAME}.service
-Requires=${SERVICE_NAME}.service
+After=network.target ${SERVICE_NAME}.service ${AGENT_SERVICE}.service
+Requires=${SERVICE_NAME}.service ${AGENT_SERVICE}.service
 
 [Service]
 Type=simple
@@ -275,7 +275,7 @@ show_access() {
       warn "Tunnel URL is not ready yet. Check log: tail -f ${LOG_DIR}/tunnel.log (or journalctl -u ${TUNNEL_SERVICE} -f with systemd)"
     fi
   fi
-  warn "This tunnel exposes the web panel only. Minecraft Java TCP routing is a separate OMCP Routing Engine and is not implemented by this preview installer yet."
+  warn "This HTTPS tunnel is for the web panel only. Minecraft Java traffic uses per-server TCP routing configured after the server is created."
 }
 ensure_access_config() {
   id omcp >/dev/null 2>&1 || useradd --system --home "${INSTALL_DIR}" --shell /usr/sbin/nologin omcp
@@ -327,7 +327,7 @@ install_panel() {
   build_app
   say "OMCP Panel installed in ${mode} mode."
   show_access
-  warn "Preview only: API authentication/RBAC, Connector provisioning, Minecraft server deployment and TCP routing are not production-ready."
+  say "Real Minecraft server provisioning and per-server routing are enabled through the local agent. Keep backups and review provider limitations before production use."
 }
 update_panel() {
   need_root; need_debian; prepare_source; apt-get install -y python3 python3-paramiko openjdk-21-jre-headless openssh-client cpulimit; ensure_node
@@ -341,7 +341,7 @@ update_panel() {
   show_access
 }
 repair_panel() {
-  need_root; need_debian; prepare_source; ensure_node
+  need_root; need_debian; prepare_source; apt-get install -y python3 python3-paramiko openjdk-21-jre-headless openssh-client cpulimit; ensure_node
   ensure_access_config
   build_app
   say "OMCP Panel rebuilt and services restarted."
@@ -359,7 +359,7 @@ uninstall_panel() {
     stop_background agent
     stop_background tunnel
   fi
-  rm -f "${SERVICE_FILE}" "${GATEWAY_FILE}" "${TUNNEL_FILE}" "${ENV_FILE}"
+  rm -f "${SERVICE_FILE}" "${GATEWAY_FILE}" "${AGENT_FILE}" "${TUNNEL_FILE}" "${ENV_FILE}"
   if has_systemd; then systemctl daemon-reload; fi
   rm -rf "${INSTALL_DIR}"
   say "OMCP removed. Node.js and system packages were left installed."
