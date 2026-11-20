@@ -14,30 +14,37 @@
 - Planned console, files, properties, plugins/mods, versions, worlds, players, SFTP, backups and permissions.
 - Separate API, Connector, database and TCP routing engine.
 
-## Install the preview
+## Install OMCP
 
-On Debian/Ubuntu with root access:
+On Debian/Ubuntu with root access, run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/notmronionji/ONION-OMCP/main/install.sh | sudo bash
 ```
 
-The installer opens a menu for install, update, repair and uninstall. To run a specific action:
+Choose one of the two network modes in the installer:
+
+- **IPv4:** direct public IPv4 link on port 6768. Allow TCP 6768 in your VPS/provider firewall.
+- **Non-IPv4:** starts a free Cloudflare Quick Tunnel and prints an HTTPS `trycloudflare.com` link. No domain or Cloudflare account is required. The link can change when the tunnel restarts.
+
+Both modes put a password-protected gateway in front of the panel. The generated password is stored in `/etc/omcp-panel.env`; keep it private. The panel preview itself listens only on localhost.
+
+Non-interactive install commands:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/notmronionji/ONION-OMCP/main/install.sh | sudo bash -s -- install
+curl -fsSL https://raw.githubusercontent.com/notmronionji/ONION-OMCP/main/install.sh | sudo bash -s -- install ipv4
+curl -fsSL https://raw.githubusercontent.com/notmronionji/ONION-OMCP/main/install.sh | sudo bash -s -- install non-ipv4
+```
+
+Update, repair and uninstall:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/notmronionji/ONION-OMCP/main/install.sh | sudo bash -s -- update
 curl -fsSL https://raw.githubusercontent.com/notmronionji/ONION-OMCP/main/install.sh | sudo bash -s -- repair
 curl -fsSL https://raw.githubusercontent.com/notmronionji/ONION-OMCP/main/install.sh | sudo bash -s -- uninstall
 ```
 
-The preview binds to `127.0.0.1:6767` only. To view it from your computer, create an SSH tunnel:
-
-```bash
-ssh -L 6767:127.0.0.1:6767 your-user@your-server
-```
-
-Then open `http://127.0.0.1:6767` on your computer. Do not expose this unauthenticated preview to the public internet.
+**Important:** the current installer exposes the web-panel preview behind login. It does not yet deploy the API, Connector, Minecraft server processes or Minecraft Java TCP Routing Engine. Minecraft public IP/port routing remains a separate backend implementation task; a Cloudflare web Quick Tunnel is not used as a Minecraft TCP relay.
 
 ## Local development
 
