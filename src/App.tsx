@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import {
   Activity, ArrowRight, ArrowUpRight, Bell, Blocks, Cable,
-  Check, ChevronDown, ChevronRight, CircleHelp, Cpu, EthernetPort, FileCode2,
+  Check, ChevronDown, ChevronRight, CircleHelp, Cpu, FileCode2,
   Globe2, HardDrive, LayoutDashboard, LifeBuoy, LockKeyhole, Menu, MoreHorizontal,
   Network, Plus, RadioTower, Search, Server, Settings2, ShieldCheck, Sparkles,
   Users, Wifi, X, Zap,
@@ -107,7 +107,7 @@ function App() {
   )
 }
 
-function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
+function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
   return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{action}</div>
 }
 
