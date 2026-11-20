@@ -6,9 +6,11 @@ INSTALL_DIR="/opt/omcp-panel"
 APP_DIR="${INSTALL_DIR}/app"
 SERVICE_NAME="omcp-panel"
 GATEWAY_SERVICE="omcp-gateway"
+AGENT_SERVICE="omcp-agent"
 TUNNEL_SERVICE="omcp-cloudflared"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 GATEWAY_FILE="/etc/systemd/system/${GATEWAY_SERVICE}.service"
+AGENT_FILE="/etc/systemd/system/${AGENT_SERVICE}.service"
 TUNNEL_FILE="/etc/systemd/system/${TUNNEL_SERVICE}.service"
 ENV_FILE="/etc/omcp-panel.env"
 MODE_FILE="${INSTALL_DIR}/network-mode"
@@ -16,6 +18,8 @@ PID_DIR="${INSTALL_DIR}/run"
 LOG_DIR="${INSTALL_DIR}/logs"
 PORT="${OMCP_PORT:-6767}"
 GATEWAY_PORT="${OMCP_GATEWAY_PORT:-6768}"
+AGENT_PORT="${OMCP_AGENT_PORT:-8765}"
+DATA_DIR="/var/lib/omcp-panel/data"
 REPO_URL="https://github.com/notmronionji/ONION-OMCP.git"
 
 say() { printf '\033[1;32m[OMCP]\033[0m %s\n' "$*"; }
@@ -76,6 +80,36 @@ ReadWritePaths=${APP_DIR}
 WantedBy=multi-user.target
 UNIT
   if has_systemd; then systemctl enable "${SERVICE_NAME}"; fi
+}
+write_agent_service() {
+  mkdir -p "${DATA_DIR}"
+  chown -R omcp:omcp "${DATA_DIR}"
+  cat > "${AGENT_FILE}" <<UNIT
+[Unit]
+Description=OMCP Minecraft server agent
+After=network.target
+
+[Service]
+Type=simple
+User=omcp
+Group=omcp
+WorkingDirectory=${APP_DIR}
+Environment=OMCP_HOST=127.0.0.1
+Environment=OMCP_PORT=${AGENT_PORT}
+Environment=OMCP_DATA=${DATA_DIR}
+ExecStart=/usr/bin/python3 ${APP_DIR}/agent/omcp_agent.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=${DATA_DIR}
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  if has_systemd; then systemctl enable "${AGENT_SERVICE}"; fi
 }
 write_gateway_service() {
   cat > "${GATEWAY_FILE}" <<UNIT
@@ -262,14 +296,18 @@ build_app() {
   if [[ -f "${ENV_FILE}" ]]; then chown root:omcp "${ENV_FILE}"; chmod 0640 "${ENV_FILE}"; fi
   write_panel_service
   write_gateway_service
+  write_agent_service
+  mkdir -p "${DATA_DIR}"
+  chown -R omcp:omcp "${DATA_DIR}"
   if has_systemd; then
     systemctl daemon-reload
-    systemctl restart "${SERVICE_NAME}" "${GATEWAY_SERVICE}"
+    systemctl restart "${AGENT_SERVICE}" "${SERVICE_NAME}" "${GATEWAY_SERVICE}"
     if [[ -f "${MODE_FILE}" ]] && [[ "$(cat "${MODE_FILE}")" == "non-ipv4" ]]; then
       systemctl restart "${TUNNEL_SERVICE}"
     fi
   else
     warn "systemd not detected; launching OMCP processes in background mode."
+    start_background agent runuser -u omcp -- env OMCP_HOST=127.0.0.1 OMCP_PORT="${AGENT_PORT}" OMCP_DATA="${DATA_DIR}" python3 "${APP_DIR}/agent/omcp_agent.py"
     start_background panel runuser -u omcp -- npm --prefix "${APP_DIR}" run preview -- --host 127.0.0.1 --port "${PORT}"
     load_gateway_env
     start_background gateway runuser -u omcp -- env OMCP_GATEWAY_HOST="${OMCP_GATEWAY_HOST}" OMCP_GATEWAY_PORT="${OMCP_GATEWAY_PORT}" OMCP_USERNAME="${OMCP_USERNAME}" OMCP_PASSWORD="${OMCP_PASSWORD}" node "${APP_DIR}/gateway.mjs"
@@ -281,7 +319,7 @@ install_panel() {
   need_root; need_debian
   [[ -n "$mode" ]] || fail "Specify network mode: install ipv4 OR install non-ipv4"
   apt-get update
-  apt-get install -y ca-certificates curl git openssl
+  apt-get install -y ca-certificates curl git openssl python3 python3-paramiko openjdk-21-jre-headless openssh-client cpulimit
   ensure_node
   prepare_source
   id omcp >/dev/null 2>&1 || useradd --system --home "${INSTALL_DIR}" --shell /usr/sbin/nologin omcp
@@ -292,7 +330,7 @@ install_panel() {
   warn "Preview only: API authentication/RBAC, Connector provisioning, Minecraft server deployment and TCP routing are not production-ready."
 }
 update_panel() {
-  need_root; need_debian; prepare_source; ensure_node
+  need_root; need_debian; prepare_source; apt-get install -y python3 python3-paramiko openjdk-21-jre-headless openssh-client cpulimit; ensure_node
   ensure_access_config
   cd "${APP_DIR}"
   # The app directory is intentionally owned by the unprivileged omcp service user.
@@ -314,10 +352,11 @@ uninstall_panel() {
   read -r -p "Remove OMCP Panel, access gateway, tunnel and application files? [y/N] " answer </dev/tty
   [[ "$answer" == "y" || "$answer" == "Y" ]] || { say "Cancelled."; return; }
   if has_systemd; then
-    systemctl disable --now "${SERVICE_NAME}" "${GATEWAY_SERVICE}" "${TUNNEL_SERVICE}" 2>/dev/null || true
+    systemctl disable --now "${SERVICE_NAME}" "${GATEWAY_SERVICE}" "${AGENT_SERVICE}" "${TUNNEL_SERVICE}" 2>/dev/null || true
   else
     stop_background panel
     stop_background gateway
+    stop_background agent
     stop_background tunnel
   fi
   rm -f "${SERVICE_FILE}" "${GATEWAY_FILE}" "${TUNNEL_FILE}" "${ENV_FILE}"
