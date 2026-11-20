@@ -44,7 +44,7 @@ User=omcp
 Group=omcp
 WorkingDirectory=${APP_DIR}
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/npm run preview -- --host 0.0.0.0 --port ${PORT}
+ExecStart=/usr/bin/npm run preview -- --host 127.0.0.1 --port ${PORT}
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -76,7 +76,7 @@ install_panel() {
   prepare_source
   build_app
   say "OMCP Panel preview installed."
-  say "Open: http://<your-server-ip>:${PORT}"
+  say "Preview listens on: http://127.0.0.1:${PORT} (localhost only)"
   warn "This is a frontend preview only. API, Connector, Minecraft provisioning and TCP routing are not implemented yet."
 }
 update_panel() {
