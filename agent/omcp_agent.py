@@ -1737,8 +1737,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e: return send(self,400,{"error":str(e)})
         if path=="/api/logout":
             header=self.headers.get("Authorization","")
-            if header.startswith("Bearer "):
-                with SESSION_LOCK: SESSIONS.pop(header[7:],None)
+            token=header[7:] if header.startswith("Bearer ") else self.headers.get("X-OMCP-Session","")
+            if token:
+                with SESSION_LOCK: SESSIONS.pop(token,None)
             return send(self,200,{"ok":True})
         if not self.auth(): return send(self,401,{"error":"Login required"})
         if path=="/api/users":
