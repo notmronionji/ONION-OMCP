@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
 import {
-  Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Bell, Blocks, Cable,
-  Check, ChevronDown, ChevronRight, CircleHelp, Cloud, Command, Cpu, Database,
-  EthernetPort, FileCode2, Gauge, Globe2, HardDrive, LayoutDashboard, LifeBuoy,
-  LockKeyhole, Menu, MoreHorizontal, Network, Plus, RadioTower, Search, Server,
-  Settings2, ShieldCheck, Sparkles, TerminalSquare, Users, Wifi, X, Zap,
+  Activity, ArrowRight, ArrowUpRight, Bell, Blocks, Cable,
+  Check, ChevronDown, ChevronRight, CircleHelp, Cpu, EthernetPort, FileCode2,
+  Globe2, HardDrive, LayoutDashboard, LifeBuoy, LockKeyhole, Menu, MoreHorizontal,
+  Network, Plus, RadioTower, Search, Server, Settings2, ShieldCheck, Sparkles,
+  Users, Wifi, X, Zap,
 } from 'lucide-react'
 
 type Page = 'Overview' | 'Servers' | 'Routing' | 'Connectors' | 'Users' | 'Extensions' | 'Settings'
