@@ -1,36 +1,44 @@
-# ONION-OMCP
+# OMCP Panel
 
-An independent Minecraft hosting control plane with its own Panel, API, Connector and TCP routing services.
+**ONION Minecraft Control Panel** — an independent Minecraft hosting control panel.
 
-> **Development status: foundation / not production-ready.** This repository is being built incrementally. Do not expose it to the public internet or use it to host production workloads until the security and end-to-end test gates in the roadmap have passed.
+> **Status: early development.** The repository is being populated directly on `main`. The current UI is a frontend foundation; server provisioning, routing, tunnel transport and installer operations are not production-ready until their backend implementations and integration tests are complete.
 
-## Product goals
+## Product
 
-- A responsive dark hosting dashboard with separate Admin and Server experiences.
-- OMCP Connectors instead of Pterodactyl Nodes/Wings.
+- Premium dark dashboard with responsive Admin and Server experiences.
+- Original OMCP branding, layouts, animations and components.
+- Minecraft server creation with connector, network, tunnel and routing configuration.
 - IPv4, IPv6 and dual-stack capability detection.
-- Shared public endpoints and authenticated Minecraft Java TCP routing for hosts without public IPv4.
-- Server lifecycle, console, files, properties, plugins/mods, versions, worlds, players, SFTP and backups.
-- Real telemetry and explicit error states; no fabricated status or success messages.
+- Shared public IPv4 routing for private/IPv6-only origins through a configured public relay.
+- Server console, files, properties, plugins/mods, versions, worlds, players, SFTP, backups and permissions.
+- Separate API, Connector, database and TCP routing engine.
 
-## Repository boundaries
+## Architecture
 
-- **ONION-OMCP** is the implementation target.
-- **OMCP-BETA** remains separate and must not be modified by this project.
-- [JTG Panel](https://github.com/JishnuTheGamer/Jtg) is a workflow and visual-reference project only. OMCP will use an original implementation. No JTG source code or assets are copied into this repository. Review the reference repository's license and obtain permission before reusing any protected material.
-
-## Planned architecture
-
-| Component | Responsibility |
+| Service | Responsibility |
 |---|---|
-| Panel | Admin/user UI, server UI, setup and branding |
-| API | Authentication, RBAC, persistence, audit log and orchestration |
-| Connector | VPS identity, secure registration, heartbeat, telemetry and server operations |
-| Routing Engine | Public TCP ingress, port allocation, authenticated connector tunnels and health |
-| Database | Users, servers, connectors, allocations, routes, permissions and audit events |
+| Panel | Admin dashboard, server dashboard and server creation workflow |
+| API | Authentication, authorization, persistence, audit and orchestration |
+| Connector | Secure VPS enrollment, heartbeat, telemetry and allowlisted server operations |
+| Routing Engine | Minecraft Java TCP ingress, port allocations, authenticated tunnels and health checks |
+| Database | Users, roles, servers, connectors, allocations, routes and audit events |
 
 ## Development
 
-The project is currently at the foundation stage. Runtime commands will be documented after the corresponding application and tests exist. Do not run an installer copied from another project.
+Requirements: Node.js 20+ and npm.
 
-See [docs/architecture.md](docs/architecture.md) and [docs/roadmap.md](docs/roadmap.md) for design decisions and implementation gates.
+```bash
+git clone https://github.com/notmronionji/ONION-OMCP.git
+cd ONION-OMCP
+npm install
+npm run dev
+```
+
+The frontend currently runs as a UI foundation. Do not use it to provision real servers or expose it publicly until the API, Connector, routing security and deployment installer are implemented and tested.
+
+## Reference and implementation
+
+The JTG repository may be consulted as a visual/workflow reference. This project uses an original OMCP implementation; it does not claim ownership of third-party source or assets. Reuse of third-party code requires a compatible license or explicit permission.
+
+See `docs/architecture.md` and `docs/roadmap.md` for design and delivery gates.
