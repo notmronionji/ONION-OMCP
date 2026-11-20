@@ -157,11 +157,13 @@ configure_access() {
   chmod 0640 "${ENV_FILE}"
 }
 show_access() {
-  local mode public_ip credentials
+  local mode public_ip credentials password
   mode="$(cat "${MODE_FILE}" 2>/dev/null || echo ipv4)"
   credentials="$(sed -n 's/^OMCP_USERNAME=//p' "${ENV_FILE}")"
+  password="$(sed -n 's/^OMCP_PASSWORD=//p' "${ENV_FILE}")"
   say "Panel login username: ${credentials:-admin}"
-  say "Panel password is stored securely in ${ENV_FILE} (root-readable; group omcp)."
+  say "Panel login password: ${password}"
+  say "Credentials are also stored in ${ENV_FILE}; keep them private."
   if [[ "$mode" == "ipv4" ]]; then
     public_ip="$(curl -4fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)"
     if [[ -n "$public_ip" ]]; then
