@@ -118,6 +118,13 @@ case "${1:-menu}" in
   update) update_panel ;;
   repair) repair_panel ;;
   uninstall) uninstall_panel ;;
-  menu|"") menu ;;
+  menu|"")
+    if [[ -t 0 ]]; then
+      menu
+    else
+      say "Non-interactive install detected; starting installation."
+      install_panel
+    fi
+    ;;
   *) fail "Usage: sudo bash install.sh [install|update|repair|uninstall]" ;;
 esac
