@@ -292,7 +292,9 @@ update_panel() {
   need_root; need_debian; prepare_source; ensure_node
   ensure_access_config
   cd "${APP_DIR}"
-  git pull --ff-only origin main
+  # The app directory is intentionally owned by the unprivileged omcp service user.
+  # Mark it safe for this one Git invocation instead of weakening global Git checks.
+  git -c "safe.directory=${APP_DIR}" pull --ff-only origin main
   build_app
   say "OMCP Panel updated."
   show_access
