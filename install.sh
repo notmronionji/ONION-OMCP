@@ -273,9 +273,7 @@ build_app() {
     start_background panel runuser -u omcp -- npm --prefix "${APP_DIR}" run preview -- --host 127.0.0.1 --port "${PORT}"
     load_gateway_env
     start_background gateway runuser -u omcp -- env OMCP_GATEWAY_HOST="${OMCP_GATEWAY_HOST}" OMCP_GATEWAY_PORT="${OMCP_GATEWAY_PORT}" OMCP_USERNAME="${OMCP_USERNAME}" OMCP_PASSWORD="${OMCP_PASSWORD}" node "${APP_DIR}/gateway.mjs"
-    if [[ -f "${MODE_FILE}" ]] && [[ "$(cat "${MODE_FILE}")" == "non-ipv4" ]]; then
-      start_background tunnel runuser -u omcp -- /usr/local/bin/cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:${GATEWAY_PORT}"
-    fi
+    # show_access starts the Quick Tunnel once the panel and gateway are ready.
   fi
 }
 install_panel() {
