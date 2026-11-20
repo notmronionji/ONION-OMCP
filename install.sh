@@ -190,6 +190,16 @@ show_access() {
   fi
   warn "This tunnel exposes the web panel only. Minecraft Java TCP routing is a separate OMCP Routing Engine and is not implemented by this preview installer yet."
 }
+ensure_access_config() {
+  id omcp >/dev/null 2>&1 || useradd --system --home "${INSTALL_DIR}" --shell /usr/sbin/nologin omcp
+  if [[ ! -s "${ENV_FILE}" ]]; then
+    apt-get install -y openssl
+    configure_access "$(cat "${MODE_FILE}" 2>/dev/null || echo ipv4)"
+  elif [[ "$(cat "${MODE_FILE}" 2>/dev/null || echo ipv4)" == "non-ipv4" && ! -x /usr/local/bin/cloudflared ]]; then
+    install_cloudflared
+    write_tunnel_service
+  fi
+}
 build_app() {
   cd "${APP_DIR}"
   npm install
@@ -221,7 +231,8 @@ install_panel() {
   warn "Preview only: API authentication/RBAC, Connector provisioning, Minecraft server deployment and TCP routing are not production-ready."
 }
 update_panel() {
-  need_root; prepare_source; ensure_node
+  need_root; need_debian; prepare_source; ensure_node
+  ensure_access_config
   cd "${APP_DIR}"
   git pull --ff-only origin main
   build_app
@@ -229,7 +240,8 @@ update_panel() {
   show_access
 }
 repair_panel() {
-  need_root; prepare_source; ensure_node
+  need_root; need_debian; prepare_source; ensure_node
+  ensure_access_config
   build_app
   say "OMCP Panel rebuilt and services restarted."
   [[ -f "${MODE_FILE}" ]] && show_access
